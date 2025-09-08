@@ -43,6 +43,8 @@
       backdrop-filter: blur(6px) saturate(110%);
       box-shadow: 0 6px 30px rgba(2,6,23,0.6), inset 0 1px 0 rgba(255,255,255,0.02);
       animation: slideIn 0.6s ease;
+      transition: transform .28s ease;
+      z-index: 160;
     }
     @keyframes slideIn {
       from {transform: translateX(-100%); opacity: 0;}
@@ -62,6 +64,36 @@
     }
     .nav button:hover {background: rgba(255,255,255,0.05);}
     .nav button.active {background: var(--accent);color: #022047;}
+
+    /* footer/profile inside sidebar */
+    .sidebar-footer { margin-top:auto; display:flex;flex-direction:column; gap:12px; }
+    .profile { display:flex; align-items:center; gap:12px; }
+    .profile img { width:40px; height:40px; border-radius:50%; border:2px solid var(--glass-border); object-fit:cover; }
+    .logout-btn { padding:8px 10px; border-radius:8px; border:none; background:var(--danger); color:#fff; font-weight:700; cursor:pointer; }
+
+    /* sidebar toggle button (mobile) */
+    .sidebar-toggle {
+      display:none;
+      position: fixed;
+      top: 14px;
+      left: 14px;
+      background: var(--accent);
+      border: none;
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      z-index: 170;
+      font-weight:700;
+      color:#022047;
+      box-shadow: 0 6px 20px rgba(96,165,250,0.08);
+    }
+
+    /* backdrop when sidebar open on mobile */
+    .backdrop {
+      position: fixed; inset:0; background: rgba(0,0,0,0.45); z-index: 150;
+      display:none;
+    }
+    .backdrop.show { display:block; }
 
     /* ---- Main ---- */
     .main {flex:1;padding:28px;display:flex;flex-direction:column;gap:18px;overflow:auto;}
@@ -137,15 +169,23 @@
 
     /* ---- Responsive ---- */
     @media (max-width:768px){
-      .sidebar{display:none}
-      .main{margin-left:0}
-      .bottom-nav{display:flex}
+      .sidebar{ position: fixed; top:0; bottom:0; left:0; transform: translateX(-110%); }
+      .sidebar.open { transform: translateX(0); }
+      .sidebar-toggle{ display:block; }
+      .main{ margin-left:0; }
+      .bottom-nav{ display:flex; }
     }
   </style>
 </head>
 <body>
+  <!-- sidebar toggle button (visible on mobile) -->
+  <button id="sidebarToggle" class="sidebar-toggle" aria-label="Open menu">☰</button>
+
+  <!-- backdrop for mobile sidebar -->
+  <div id="backdrop" class="backdrop" tabindex="-1" aria-hidden="true"></div>
+
   <!-- Sidebar -->
-  <div class="sidebar">
+  <div class="sidebar" id="sidebar" role="navigation" aria-label="Main sidebar">
     <div class="sidebar-header">
       <div class="logo">TP</div>
       <div>
@@ -153,9 +193,21 @@
         <p>Manage lines • tills • transactions</p>
       </div>
     </div>
+
     <div class="nav">
-      <button id="tillsBtn" class="active">Tills</button>
-      <button id="usersBtn">Users</button>
+      <button id="tillsBtn" class="active" title="Tills">Tills</button>
+      <button id="usersBtn" title="Users">Users</button>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="profile">
+        <img src="https://via.placeholder.com/40" alt="Profile">
+        <div>
+          <div style="font-weight:600;">Admin</div>
+          <div style="font-size:12px;color:var(--muted)">Online</div>
+        </div>
+      </div>
+      <button id="logoutBtn" class="logout-btn" title="Logout">Logout</button>
     </div>
   </div>
 
@@ -165,9 +217,9 @@
       <div class="page-title">Jamii Sim Networks Ltd.</div>
       <div style="flex:1">
         <div class="search-box">
-          <input type="text" id="search" placeholder="Search by Phone, Till, Store, or User...">
+          <input type="text" id="search" placeholder="Search by Phone, Till, Store, or User..." aria-label="Search">
         </div>
-        <div class="stats">
+        <div class="stats" role="status" aria-live="polite">
           <div class="stat"><div id="statStores">—</div><div>Stores</div></div>
           <div class="stat"><div id="statTills">—</div><div>Tills</div></div>
           <div class="stat"><div id="statTx">—</div><div>Transactions</div></div>
@@ -175,39 +227,69 @@
         </div>
       </div>
     </div>
-    <div id="content" class="grid"></div>
+
+    <div id="content" class="grid" aria-live="polite" aria-atomic="true"></div>
   </div>
 
   <!-- Bottom nav (mobile) -->
-  <div class="bottom-nav">
-    <button id="tillsBtnMobile" class="active">Tills</button>
-    <button id="usersBtnMobile">Users</button>
+  <div class="bottom-nav" role="tablist" aria-label="Mobile navigation">
+    <button id="tillsBtnMobile" class="active" data-tab="tills">Tills</button>
+    <button id="usersBtnMobile" data-tab="users">Users</button>
   </div>
 
   <!-- Loader -->
-  <div id="loader" class="loader-wrap"><div class="spinner"></div></div>
+  <div id="loader" class="loader-wrap" aria-hidden="true"><div class="spinner" role="status" aria-label="Loading"></div></div>
 
   <script>
+    // === CSV urls (untouched) ===
     const TILLS_CSV="https://docs.google.com/spreadsheets/d/e/2PACX-1vRfQfgn940b1IUrQ8NatQIzV0MHQaWA6RnTagK-66doBSjbP75FYXfi4NCErdQ_-3MGV5fYZWjZmAQE/pub?output=csv";
     const USERS_CSV="https://docs.google.com/spreadsheets/d/e/2PACX-1vSuFyks-JWCzGtFlrSAvyal_zNnrViiNVmSR0j_E41cIhFuP1oy-r9xTbMvlZhN3FakcfmyqHsPiTGO/pub?gid=0&single=true&output=csv";
 
     let tills=[], users=[], activeTab="tills";
     const loaderEl=document.getElementById("loader"), contentEl=document.getElementById("content");
 
-    function showLoader(v){v?loaderEl.classList.add("visible"):loaderEl.classList.remove("visible");}
-    async function fetchCSV(url){const res=await fetch(url);return parseCSV(await res.text());}
-    function parseCSV(csv){const rows=csv.trim().split("\n").map(r=>r.split(","));const headers=rows[0];return rows.slice(1).map(row=>headers.reduce((o,h,i)=>{o[h.trim()]=row[i]?row[i].trim():"";return o;},{}));}
+    function showLoader(v){ if(v) loaderEl.classList.add("visible"); else loaderEl.classList.remove("visible"); }
+    async function fetchCSV(url){ const res = await fetch(url); return parseCSV(await res.text()); }
+    function parseCSV(csv){
+      if(!csv) return [];
+      const rows = csv.trim().split("\n").map(r => r.split(","));
+      const headers = rows[0];
+      return rows.slice(1).map(row => headers.reduce((o,h,i) => { o[h.trim()] = row[i] ? row[i].trim() : ""; return o; }, {}));
+    }
 
+    function formatCurrency(v){
+      const num = Number(v) || 0;
+      return num.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+    }
+
+    // render content
     function render(){
-      const search=document.getElementById("search").value.toLowerCase();contentEl.innerHTML="";
-      if(activeTab==="tills"){
-        tills.filter(t=>
+      const search=document.getElementById("search").value.toLowerCase();
+      contentEl.innerHTML = "";
+
+      if(activeTab === "tills"){
+        const filtered = tills.filter(t =>
           (t["Phone number"]||"").toLowerCase().includes(search) ||
           (t["Till Number"]||"").toLowerCase().includes(search) ||
           (t["Store Number"]||"").toLowerCase().includes(search)
-        ).forEach(t=>{
-          const c=document.createElement("div");c.className="card";
-          c.innerHTML=`
+        );
+
+        if(filtered.length === 0){
+          const empty = document.createElement("div");
+          empty.className = "muted";
+          empty.style.gridColumn = "1/-1";
+          empty.style.padding = "18px";
+          empty.style.background = "transparent";
+          empty.textContent = "No tills found for that search.";
+          contentEl.appendChild(empty);
+          return;
+        }
+
+        filtered.forEach((t,i)=>{
+          const c = document.createElement("div");
+          c.className = "card";
+          c.style.animationDelay = (i * 40) + "ms";
+          c.innerHTML = `
             <p><b>Phone:</b> ${t["Phone number"]||"—"}</p>
             <p><b>Name:</b> ${t["Name"]||"—"}</p>
             <p><b>ID:</b> ${t["ID"]||"—"}</p>
@@ -217,16 +299,33 @@
           contentEl.appendChild(c);
         });
 
-        document.getElementById("statStores").textContent=[...new Set(tills.map(t=>t["Store Number"]))].filter(Boolean).length;
-        document.getElementById("statTills").textContent=tills.length;
+        // stats: stores and tills count (stores = unique store numbers)
+        const storesCount = [...new Set(tills.map(t=>t["Store Number"]))].filter(Boolean).length;
+        document.getElementById("statStores").textContent = storesCount;
+        document.getElementById("statTills").textContent = tills.length;
       } else {
-        users.filter(u=>
+        const filtered = users.filter(u =>
           (u["Phone Number"]||"").toLowerCase().includes(search) ||
           (u["Name"]||"").toLowerCase().includes(search) ||
           (u["ID Number"]||"").toLowerCase().includes(search)
-        ).forEach(u=>{
-          const c=document.createElement("div");c.className="card";
-          c.innerHTML=`
+        );
+
+        if(filtered.length === 0){
+          const empty = document.createElement("div");
+          empty.className = "muted";
+          empty.style.gridColumn = "1/-1";
+          empty.style.padding = "18px";
+          empty.style.background = "transparent";
+          empty.textContent = "No users found for that search.";
+          contentEl.appendChild(empty);
+          return;
+        }
+
+        filtered.forEach((u,i)=>{
+          const c = document.createElement("div");
+          c.className = "card";
+          c.style.animationDelay = (i * 40) + "ms";
+          c.innerHTML = `
             <p><b>Phone:</b> ${u["Phone Number"]||"—"}</p>
             <p><b>Name:</b> ${u["Name"]||"—"}</p>
             <p><b>ID:</b> ${u["ID Number"]||"—"}</p>
@@ -234,31 +333,109 @@
           contentEl.appendChild(c);
         });
       }
+
+      // update transactions + amount summary conservatively if available in data
+      // count rows that contain amount-like fields
+      const txFields = ["Amount","amount","Transaction Amount","TransactionAmount"];
+      let txCount = 0;
+      let totalAmount = 0;
+      function scanRows(rows){
+        rows.forEach(r=>{
+          for(const f of txFields){
+            if(r[f]){
+              txCount++;
+              totalAmount += Number(r[f]) || 0;
+              break;
+            }
+          }
+        });
+      }
+      scanRows(tills);
+      scanRows(users);
+      document.getElementById("statTx").textContent = txCount || "-";
+      document.getElementById("statAmount").textContent = totalAmount ? formatCurrency(totalAmount) : "-";
     }
 
+    // tab switching + sync
     function switchTab(tab){
-      activeTab=tab;
+      activeTab = tab;
       document.querySelectorAll("#tillsBtn,#usersBtn,#tillsBtnMobile,#usersBtnMobile").forEach(b=>b.classList.remove("active"));
-      if(tab==="tills"){document.getElementById("tillsBtn").classList.add("active");document.getElementById("tillsBtnMobile").classList.add("active");}
-      else{document.getElementById("usersBtn").classList.add("active");document.getElementById("usersBtnMobile").classList.add("active");}
+      if(tab==="tills"){
+        document.getElementById("tillsBtn").classList.add("active");
+        document.getElementById("tillsBtnMobile").classList.add("active");
+      } else {
+        document.getElementById("usersBtn").classList.add("active");
+        document.getElementById("usersBtnMobile").classList.add("active");
+      }
+      // close sidebar on small screens after selection
+      if(window.matchMedia("(max-width:768px)").matches){
+        closeSidebar();
+      }
       render();
     }
 
-    document.getElementById("tillsBtn").onclick=()=>switchTab("tills");
-    document.getElementById("usersBtn").onclick=()=>switchTab("users");
-    document.getElementById("tillsBtnMobile").onclick=()=>switchTab("tills");
-    document.getElementById("usersBtnMobile").onclick=()=>switchTab("users");
-    document.getElementById("search").addEventListener("input",render);
+    // click handlers
+    document.getElementById("tillsBtn").onclick = ()=>switchTab("tills");
+    document.getElementById("usersBtn").onclick = ()=>switchTab("users");
+    document.getElementById("tillsBtnMobile").onclick = ()=>switchTab("tills");
+    document.getElementById("usersBtnMobile").onclick = ()=>switchTab("users");
+    document.getElementById("search").addEventListener("input", render);
 
-    let startX=0;const main=document.getElementById("mainArea");
-    main.addEventListener("touchstart",e=>{startX=e.touches[0].clientX;});
-    main.addEventListener("touchend",e=>{
-      const endX=e.changedTouches[0].clientX;
-      if(startX-endX>50){switchTab(activeTab==="tills"?"users":"tills");}
-      else if(endX-startX>50){switchTab(activeTab==="users"?"tills":"users");}
+    // Swipe support (mainArea)
+    let startX = 0;
+    const main = document.getElementById("mainArea");
+    const tabs = ["tills","users"];
+    main.addEventListener("touchstart", e => { startX = e.touches[0].clientX; });
+    main.addEventListener("touchend", e => {
+      const endX = e.changedTouches[0].clientX;
+      if (startX - endX > 50) {
+        switchTab(activeTab === "tills" ? "users" : "tills");
+      } else if (endX - startX > 50) {
+        switchTab(activeTab === "users" ? "tills" : "users");
+      }
     });
 
-    async function init(){try{showLoader(true);tills=await fetchCSV(TILLS_CSV);users=await fetchCSV(USERS_CSV);render();}finally{showLoader(false);}}
+    // Sidebar open/close logic (mobile)
+    const sidebar = document.getElementById("sidebar");
+    const sidebarToggle = document.getElementById("sidebarToggle");
+    const backdrop = document.getElementById("backdrop");
+    function openSidebar(){ sidebar.classList.add("open"); backdrop.classList.add("show"); }
+    function closeSidebar(){ sidebar.classList.remove("open"); backdrop.classList.remove("show"); }
+    sidebarToggle.addEventListener("click", () => {
+      if(sidebar.classList.contains("open")) closeSidebar(); else openSidebar();
+    });
+    backdrop.addEventListener("click", closeSidebar);
+
+    // close sidebar when a nav item is clicked on mobile (extra safety)
+    document.querySelectorAll(".nav button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if(window.matchMedia("(max-width:768px)").matches) closeSidebar();
+      });
+    });
+
+    // logout button (dummy - change as needed)
+    document.getElementById("logoutBtn").addEventListener("click", () => { alert("Logged out (demo)"); });
+
+    // init: fetch CSVs and render
+    async function init(){
+      try{
+        showLoader(true);
+        tills = await fetchCSV(TILLS_CSV);
+        users = await fetchCSV(USERS_CSV);
+        render();
+      } catch(err){
+        contentEl.innerHTML = "";
+        const e = document.createElement("div");
+        e.className = "muted";
+        e.style.gridColumn = "1/-1";
+        e.style.padding = "18px";
+        e.textContent = "Error loading CSVs — check your sheet URLs or network. See console for details.";
+        contentEl.appendChild(e);
+        console.error(err);
+      } finally {
+        showLoader(false);
+      }
+    }
     init();
   </script>
 </body>
